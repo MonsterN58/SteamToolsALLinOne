@@ -1,0 +1,973 @@
+import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  AlertCircle,
+  CheckCircle,
+  Clock,
+  Copy,
+  Download,
+  Eraser,
+  FileText,
+  FolderCog,
+  FolderOpen,
+  Gamepad2,
+  Globe,
+  Library,
+  Loader2,
+  Minus,
+  MonitorPlay,
+  Play,
+  RefreshCw,
+  Search,
+  Settings,
+  Sparkles,
+  Square,
+  SquareArrowOutUpRight,
+  StopCircle,
+  Trash2,
+  X,
+  Zap,
+} from "lucide-react";
+import "./App.css";
+
+const API_BASE = window.nativeApp?.backendUrl || "http://127.0.0.1:18765";
+
+const statusText = {
+  idle: "待机",
+  running: "执行中",
+  success: "已完成",
+  error: "失败",
+};
+
+const statusIcons = {
+  idle: Clock,
+  running: Loader2,
+  success: CheckCircle,
+  error: AlertCircle,
+};
+
+async function request(path, options = {}) {
+  const resp = await fetch(`${API_BASE}${path}`, {
+    headers: { "Content-Type": "application/json" },
+    ...options,
+  });
+  if (!resp.ok) {
+    const payload = await resp.json().catch(() => ({}));
+    throw new Error(payload.detail || `请求失败: ${resp.status}`);
+  }
+  return resp.json();
+}
+
+function normalizeGameKey(value) {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+function StatusBadge({ status }) {
+  const Icon = statusIcons[status] || Clock;
+  const colorClass =
+    status === "idle"
+      ? "status-idle"
+      : status === "running"
+        ? "status-running"
+        : status === "success"
+          ? "status-success"
+          : "status-error";
+
+  const dotColor =
+    status === "idle"
+      ? "bg-[#a0aab8]"
+      : status === "running"
+        ? "bg-[#8898cc]"
+        : status === "success"
+          ? "bg-[#6cb58a]"
+          : "bg-[#d48686]";
+
+  return (
+    <span className={`status-badge ${colorClass}`}>
+      <span className={`status-dot ${dotColor} ${status === "running" ? "animate-pulse" : ""}`} />
+      {statusText[status] || status}
+      {status === "running" && <Icon className="h-3.5 w-3.5 animate-spin" />}
+    </span>
+  );
+}
+
+function PageTab({ active, icon, label, onClick, hint }) {
+  const TabIcon = icon;
+  return (
+    <button className={`page-tab ${active ? "page-tab-active" : ""}`} onClick={onClick}>
+      <span className="page-tab-icon-wrap">
+        <TabIcon className="h-4 w-4" />
+      </span>
+      <span className="page-tab-copy">
+        <span className="page-tab-label">{label}</span>
+        {hint && <span className="page-tab-hint">{hint}</span>}
+      </span>
+    </button>
+  );
+}
+
+function MetricCard({ icon, label, value, tone = "blue" }) {
+  const CardIcon = icon;
+  return (
+    <div className={`metric-card metric-${tone}`}>
+      <div className="metric-icon">
+        <CardIcon className="h-4 w-4" />
+      </div>
+      <div>
+        <p className="metric-label">{label}</p>
+        <p className="metric-value">{value}</p>
+      </div>
+    </div>
+  );
+}
+
+function EmptyState({ icon, title, description }) {
+  const StateIcon = icon;
+  return (
+    <div className="empty-state">
+    <StateIcon className="mx-auto mb-3 h-10 w-10 text-[#c4ccd8]" />
+    <p className="text-sm font-semibold text-[#7a8899]">{title}</p>
+    <p className="mt-1 text-xs text-[#a0aab8]">{description}</p>
+    </div>
+  );
+}
+
+function ToggleSwitch({ checked, onChange }) {
+  return (
+    <label className="toggle-switch">
+      <input type="checkbox" checked={checked} onChange={onChange} />
+      <span className="toggle-slider" />
+    </label>
+  );
+}
+
+function WindowControls() {
+  const [maximized, setMaximized] = useState(false);
+
+  useEffect(() => {
+    window.nativeApp?.windowControl?.isMaximized?.().then(setMaximized);
+    window.nativeApp?.windowControl?.onMaximizedChanged?.(setMaximized);
+  }, []);
+
+  const handleMinimize = () => window.nativeApp?.windowControl?.minimize?.();
+  const handleMaximize = () => window.nativeApp?.windowControl?.maximize?.();
+  const handleClose = () => window.nativeApp?.windowControl?.close?.();
+
+  return (
+    <div className="window-controls" onDoubleClick={(e) => e.stopPropagation()}>
+      <button
+        className="win-btn win-btn-minimize"
+        onClick={handleMinimize}
+        title="最小化"
+      >
+        <Minus className="h-3.5 w-3.5" />
+      </button>
+      <button
+        className="win-btn win-btn-maximize"
+        onClick={handleMaximize}
+        title={maximized ? "还原" : "最大化"}
+      >
+        {maximized ? <Copy className="h-3 w-3" /> : <Square className="h-3 w-3" />}
+      </button>
+      <button
+        className="win-btn win-btn-close"
+        onClick={handleClose}
+        title="关闭"
+      >
+        <X className="h-3.5 w-3.5" />
+      </button>
+    </div>
+  );
+}
+
+function App() {
+  const [activePage, setActivePage] = useState("overview");
+  const [settings, setSettings] = useState({
+    download_source: "auto",
+    auto_import: false,
+    search_enhance: false,
+  });
+  const [term, setTerm] = useState("");
+  const [searching, setSearching] = useState(false);
+  const [searchResults, setSearchResults] = useState([]);
+  const [appid, setAppid] = useState("");
+  const [taskId, setTaskId] = useState("");
+  const [taskStatus, setTaskStatus] = useState("idle");
+  const [progress, setProgress] = useState(0);
+  const [logs, setLogs] = useState([]);
+  const [selectedGame, setSelectedGame] = useState(null);
+  const [error, setError] = useState("");
+  const [importedGames, setImportedGames] = useState([]);
+  const [importsLoading, setImportsLoading] = useState(false);
+  const [importNotice, setImportNotice] = useState("");
+  const [installedGames, setInstalledGames] = useState([]);
+  const [installedLoading, setInstalledLoading] = useState(false);
+  const [installedError, setInstalledError] = useState("");
+  const [gameFilter, setGameFilter] = useState("");
+  const [selectedInstalledGame, setSelectedInstalledGame] = useState(null);
+  const [trainerQuery, setTrainerQuery] = useState("");
+  const [trainerLookup, setTrainerLookup] = useState({
+    gameName: "",
+    status: "idle",
+    message: "",
+  });
+  const [trainerTasks, setTrainerTasks] = useState([]);
+  const [trainerError, setTrainerError] = useState("");
+  const [trainerActionBusy, setTrainerActionBusy] = useState("");
+  const logContainerRef = useRef(null);
+  const manifestOffsetRef = useRef(0);
+
+  async function loadImportedGames(showLoading = true) {
+    if (showLoading) {
+      setImportsLoading(true);
+    }
+    try {
+      const data = await request("/imports");
+      setImportedGames(data.items || []);
+    } catch (err) {
+      setImportedGames([]);
+      setImportNotice(err.message);
+    } finally {
+      if (showLoading) {
+        setImportsLoading(false);
+      }
+    }
+  }
+
+  async function loadInstalledGames(showLoading = true) {
+    if (showLoading) {
+      setInstalledLoading(true);
+    }
+    setInstalledError("");
+    try {
+      const data = await request("/steam/installed-games");
+      const items = data.items || [];
+      setInstalledGames(items);
+      if (!selectedInstalledGame && items.length > 0) {
+        setSelectedInstalledGame(items[0]);
+        setTrainerQuery(items[0].name || "");
+        checkTrainerAvailability(items[0].name || "");
+      }
+    } catch (err) {
+      setInstalledGames([]);
+      setInstalledError(err.message);
+    } finally {
+      if (showLoading) {
+        setInstalledLoading(false);
+      }
+    }
+  }
+
+  async function refreshTrainerState() {
+    try {
+      const taskData = await request("/trainer/tasks");
+      setTrainerTasks(taskData.items || []);
+    } catch (err) {
+      setTrainerError(err.message);
+    }
+  }
+
+  useEffect(() => {
+    request("/settings")
+      .then((data) => setSettings(data))
+      .catch((err) => setError(err.message));
+    request("/imports")
+      .then((data) => setImportedGames(data.items || []))
+      .catch((err) => {
+        setImportedGames([]);
+        setImportNotice(err.message);
+      });
+    request("/steam/installed-games")
+      .then((data) => {
+        const items = data.items || [];
+        setInstalledGames(items);
+        if (items.length > 0) {
+          setSelectedInstalledGame(items[0]);
+          setTrainerQuery(items[0].name || "");
+          const gameName = items[0].name || "";
+          setTrainerLookup({ gameName, status: "checking", message: "正在查找修改器" });
+          request("/trainer/search", {
+            method: "POST",
+            body: JSON.stringify({ game_name: gameName }),
+          })
+            .then((result) => {
+              const hasTrainer = (result.items || []).length > 0;
+              setTrainerLookup({
+                gameName,
+                status: hasTrainer ? "available" : "unavailable",
+                message: hasTrainer ? "可启动" : "没有修改器",
+              });
+            })
+            .catch((err) => {
+              setTrainerLookup({ gameName, status: "error", message: err.message });
+            });
+        }
+      })
+      .catch((err) => {
+        setInstalledGames([]);
+        setInstalledError(err.message);
+      });
+    request("/trainer/tasks")
+      .then((data) => setTrainerTasks(data.items || []))
+      .catch((err) => setTrainerError(err.message));
+  }, []);
+
+  // Auto-scroll log container
+  useEffect(() => {
+    if (logContainerRef.current) {
+      logContainerRef.current.scrollTop = logContainerRef.current.scrollHeight;
+    }
+  }, [logs]);
+
+  useEffect(() => {
+    if (!taskId) return;
+    const timer = setInterval(async () => {
+      try {
+        const data = await request(`/tasks/${taskId}?offset=${manifestOffsetRef.current}`);
+        setTaskStatus(data.status || "running");
+        setProgress(Number(data.progress || 0));
+        manifestOffsetRef.current = data.next_offset || manifestOffsetRef.current;
+        if (Array.isArray(data.logs) && data.logs.length > 0) {
+          setLogs((prev) => [...prev, ...data.logs]);
+        }
+        if (data.game_name || data.folder_name) {
+          setSelectedGame({
+            name: data.game_name || "未知",
+            appid: data.appid,
+            image: "",
+          });
+        }
+        if (data.status === "success" || data.status === "error") {
+          clearInterval(timer);
+          setTaskId("");
+          if (data.status === "success") {
+            loadImportedGames();
+          }
+        }
+      } catch (err) {
+        clearInterval(timer);
+        setTaskId("");
+        setTaskStatus("error");
+        setError(err.message);
+      }
+    }, 900);
+    return () => clearInterval(timer);
+  }, [taskId]);
+
+  useEffect(() => {
+    const timer = setInterval(() => {
+      refreshTrainerState();
+    }, 1800);
+    return () => clearInterval(timer);
+  }, []);
+
+  const progressStyle = useMemo(
+    () => ({ width: `${Math.max(0, Math.min(100, progress))}%` }),
+    [progress],
+  );
+
+  const trainerTaskMap = useMemo(() => {
+    const map = new Map();
+    trainerTasks.forEach((item) => {
+      const key = normalizeGameKey(item.game_name);
+      if (!key || map.has(key)) return;
+      map.set(key, item);
+    });
+    return map;
+  }, [trainerTasks]);
+
+  const filteredInstalledGames = useMemo(() => {
+    const keyword = gameFilter.trim().toLowerCase();
+    return installedGames.filter((item) => {
+      if (!keyword) return true;
+      return (
+        String(item.name || "").toLowerCase().includes(keyword) ||
+        String(item.appid || "").includes(keyword)
+      );
+    });
+  }, [gameFilter, installedGames]);
+
+  const selectedGameKey = normalizeGameKey(selectedInstalledGame?.name);
+  const selectedTrainerTask = selectedGameKey ? trainerTaskMap.get(selectedGameKey) : null;
+  const trainerLookupStatus =
+    trainerLookup.status === "checking"
+      ? "查询中"
+      : trainerLookup.status === "available"
+        ? "可启动"
+        : trainerLookup.status === "unavailable"
+          ? "没有修改器"
+          : trainerLookup.status === "error"
+            ? "查询失败"
+            : "未检测";
+  const trainerLaunchDisabled =
+    trainerActionBusy.startsWith("launch") ||
+    selectedTrainerTask?.status === "downloading" ||
+    trainerLookup.status !== "available" ||
+    !trainerQuery.trim();
+
+  const saveSettings = async (next) => {
+    setSettings(next);
+    await request("/settings", {
+      method: "POST",
+      body: JSON.stringify(next),
+    });
+  };
+
+  const onSearch = async () => {
+    if (!term.trim() || searching) return;
+    setSearching(true);
+    setError("");
+    try {
+      const data = await request("/search", {
+        method: "POST",
+        body: JSON.stringify({
+          term: term.trim(),
+          limit: 10,
+          translate_fallback: settings.search_enhance,
+        }),
+      });
+      setSearchResults(data.items || []);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setSearching(false);
+    }
+  };
+
+  const onSelectGame = (item) => {
+    setSelectedGame(item);
+    setAppid(String(item.appid || ""));
+    setSearchResults([]);
+  };
+
+  const onStartDownload = async () => {
+    if (!appid.trim() || taskId) return;
+    setError("");
+    setLogs([]);
+    manifestOffsetRef.current = 0;
+    setProgress(0);
+    setTaskStatus("running");
+    try {
+      const data = await request("/tasks/download", {
+        method: "POST",
+        body: JSON.stringify({
+          appid: appid.trim(),
+          source: settings.download_source,
+          auto_import: settings.auto_import,
+        }),
+      });
+      setTaskId(data.task_id);
+    } catch (err) {
+      setTaskStatus("error");
+      setError(err.message);
+    }
+  };
+
+  const onAction = async (path) => {
+    setError("");
+    try {
+      await request(path, { method: "POST" });
+    } catch (err) {
+      setError(err.message);
+    }
+  };
+
+  const onDeleteImportedGame = async (item) => {
+    const ok = window.confirm(`确定删除 ${item.name || item.appid} 的入库文件吗？`);
+    if (!ok) return;
+    setImportsLoading(true);
+    setImportNotice("");
+    try {
+      const result = await request(`/imports/${item.appid}`, { method: "DELETE" });
+      setImportNotice(
+        `已删除 ${result.lua_deleted || 0} 个 lua，${result.manifest_deleted || 0} 个 manifest。`,
+      );
+      await loadImportedGames();
+    } catch (err) {
+      setImportNotice(err.message);
+    } finally {
+      setImportsLoading(false);
+    }
+  };
+
+  const onClearImports = async () => {
+    const ok = window.confirm("确定清理所有入库文件吗？这会移除 stplug-in 下的 lua 和关联 manifest。");
+    if (!ok) return;
+    setImportsLoading(true);
+    setImportNotice("");
+    try {
+      const result = await request("/imports/clear", { method: "POST" });
+      setImportNotice(
+        `已清理 ${result.lua_deleted || 0} 个 lua，${result.manifest_deleted || 0} 个 manifest。`,
+      );
+      await loadImportedGames();
+    } catch (err) {
+      setImportNotice(err.message);
+    } finally {
+      setImportsLoading(false);
+    }
+  };
+
+  const clearError = () => setError("");
+
+  const checkTrainerAvailability = async (gameName) => {
+    const name = String(gameName || "").trim();
+
+    if (!name) {
+      setTrainerLookup({ gameName: "", status: "idle", message: "" });
+      return;
+    }
+
+    setTrainerError("");
+    setTrainerLookup({ gameName: name, status: "checking", message: "正在查找修改器" });
+    try {
+      const result = await request("/trainer/search", {
+        method: "POST",
+        body: JSON.stringify({ game_name: name }),
+      });
+      const hasTrainer = (result.items || []).length > 0;
+      setTrainerLookup({
+        gameName: name,
+        status: hasTrainer ? "available" : "unavailable",
+        message: hasTrainer ? "可启动" : "没有修改器",
+      });
+    } catch (err) {
+      setTrainerLookup({ gameName: name, status: "error", message: err.message });
+    }
+  };
+
+  const selectInstalledGame = (item) => {
+    setSelectedInstalledGame(item);
+    setTrainerQuery(item.name || "");
+    checkTrainerAvailability(item.name || "");
+  };
+
+  const onLaunchTrainer = async () => {
+    const gameName = selectedInstalledGame?.name || trainerQuery.trim();
+    if (!gameName || trainerLookup.status !== "available") return;
+    setTrainerActionBusy(`launch:${gameName}`);
+    setTrainerError("");
+    try {
+      await request("/trainer/start-latest", {
+        method: "POST",
+        body: JSON.stringify({ game_name: gameName }),
+      });
+      await refreshTrainerState();
+    } catch (err) {
+      setTrainerError(err.message);
+    } finally {
+      setTrainerActionBusy("");
+    }
+  };
+
+  const onStopTrainer = async () => {
+    if (!selectedTrainerTask?.id) return;
+    setTrainerActionBusy(`stop:${selectedTrainerTask.id}`);
+    setTrainerError("");
+    try {
+      await request(`/trainer/stop/${selectedTrainerTask.id}`, { method: "POST" });
+      await refreshTrainerState();
+    } catch (err) {
+      setTrainerError(err.message);
+    } finally {
+      setTrainerActionBusy("");
+    }
+  };
+
+  const renderOverviewPage = () => (
+    <>
+      <section className="grid grid-cols-1 gap-3 sm:gap-4 lg:grid-cols-12">
+        <div className="glass-panel rounded-2xl p-4 sm:p-5 lg:col-span-8">
+          <div className="section-title">
+            <Search className="h-4 w-4" />
+            <span>游戏搜索</span>
+          </div>
+          <div className="flex gap-2 sm:gap-3">
+            <input
+              value={term}
+              onChange={(e) => setTerm(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && onSearch()}
+              placeholder="输入游戏名称，如 Elden Ring"
+              className="codex-input flex-1"
+            />
+            <button onClick={onSearch} disabled={searching} className="codex-btn-primary shrink-0">
+              {searching ? (
+                <>
+                  <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />搜索中
+                </>
+              ) : (
+                <>
+                  <Search className="mr-1.5 h-4 w-4" />搜索
+                </>
+              )}
+            </button>
+          </div>
+          {searchResults.length > 0 && (
+            <div className="mt-3 max-h-64 space-y-1.5 overflow-auto rounded-xl border border-[#dce1ea]/80 bg-white/60 p-2 animate-fade-in">
+              {searchResults.map((item, idx) => (
+                <button key={`${item.appid}-${idx}`} onClick={() => onSelectGame(item)} className="search-item group">
+                  <div className="flex min-w-0 items-center gap-3">
+                    {item.image ? (
+                      <img src={item.image} alt="" className="h-10 w-20 rounded-md object-cover ring-1 ring-slate-200/50" />
+                    ) : (
+                      <div className="flex h-10 w-20 items-center justify-center rounded-md bg-gradient-to-br from-[#f1f3f7] to-[#e4e9f0]">
+                        <Sparkles className="h-4 w-4 text-[#a0aab8]" />
+                      </div>
+                    )}
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-medium text-slate-800">{item.name || "未命名游戏"}</p>
+                      <p className="text-xs text-slate-400">AppID: {item.appid}</p>
+                    </div>
+                  </div>
+                  <SquareArrowOutUpRight className="h-4 w-4 text-[#c4ccd8] transition-colors group-hover:text-[#8898cc]" />
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+
+        <div className="glass-panel rounded-2xl p-4 sm:p-5 lg:col-span-4">
+          <div className="section-title">
+            <Settings className="h-4 w-4" />
+            <span>下载设置</span>
+          </div>
+          <div className="space-y-2.5 text-sm">
+            <div className="flex items-center justify-between rounded-lg border border-[#dce1ea]/80 bg-[#f8f9fc]/80 p-3 transition-colors hover:border-[#c4ccd8]/80 hover:bg-[#f1f3f8]/80">
+              <div className="flex items-center gap-2">
+                <Globe className="h-4 w-4 text-[#a0aab8]" />
+                <span className="font-medium text-[#4a5568]">下载源</span>
+              </div>
+              <select
+                value={settings.download_source}
+                onChange={(e) => saveSettings({ ...settings, download_source: e.target.value })}
+                className="codex-select"
+              >
+                <option value="auto">智能源</option>
+                <option value="domestic">国内源</option>
+                <option value="overseas">国外源</option>
+              </select>
+            </div>
+            <div className="toggle-row">
+              <div className="flex items-center gap-2">
+                <Download className="h-4 w-4 text-[#a0aab8]" />
+                <span className="font-medium text-[#4a5568]">自动入库</span>
+              </div>
+              <ToggleSwitch
+                checked={settings.auto_import}
+                onChange={(e) => saveSettings({ ...settings, auto_import: e.target.checked })}
+              />
+            </div>
+            <div className="toggle-row">
+              <div className="flex items-center gap-2">
+                <Zap className="h-4 w-4 text-[#a0aab8]" />
+                <span className="font-medium text-[#4a5568]">搜索增强</span>
+              </div>
+              <ToggleSwitch
+                checked={settings.search_enhance}
+                onChange={(e) => saveSettings({ ...settings, search_enhance: e.target.checked })}
+              />
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section className="grid min-h-0 flex-1 grid-cols-1 gap-3 sm:gap-4 lg:grid-cols-12">
+        <div className="glass-panel flex min-h-0 flex-col rounded-2xl p-4 sm:p-5 lg:col-span-5">
+          <div className="section-title mb-3">
+            <Download className="h-4 w-4" />
+            <span>任务执行</span>
+          </div>
+          <div className="mb-4 flex gap-2 sm:gap-3">
+            <input
+              value={appid}
+              onChange={(e) => setAppid(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && onStartDownload()}
+              placeholder="输入 AppID（如 570）"
+              className="codex-input flex-1"
+            />
+            <button disabled={!!taskId} onClick={onStartDownload} className="codex-btn-primary shrink-0">
+              {taskId ? (
+                <>
+                  <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />执行中
+                </>
+              ) : (
+                <>
+                  <Download className="mr-1.5 h-4 w-4" />开始下载
+                </>
+              )}
+            </button>
+          </div>
+          <div className="mb-3 flex items-center gap-2 rounded-lg bg-[#f8f9fc]/80 px-3 py-2 text-sm">
+            {selectedGame ? (
+              <>
+                <CheckCircle className="h-4 w-4 text-[#6cb58a]" />
+                <span className="text-[#5a6878]">
+                  当前游戏：<span className="font-semibold text-[#2e3a4e]">{selectedGame.name}</span>
+                  <span className="ml-1 text-[#a0aab8]">({selectedGame.appid})</span>
+                </span>
+              </>
+            ) : (
+              <>
+                <AlertCircle className="h-4 w-4 text-[#c4ccd8]" />
+                <span className="text-[#a0aab8]">当前游戏：未选择</span>
+              </>
+            )}
+          </div>
+          <div className="mb-1.5">
+            <div className="progress-track">
+              <div className="progress-fill" style={progressStyle} />
+            </div>
+          </div>
+          <div className="mb-4 text-xs font-medium text-[#7a8899]">
+            {Math.round(progress)}%
+            {taskStatus === "running" && <span className="ml-2 text-[#8898cc]">下载中...</span>}
+            {taskStatus === "success" && <span className="ml-2 text-[#6cb58a]">完成</span>}
+          </div>
+          <div className="mt-auto flex flex-wrap gap-2">
+            <button onClick={() => onAction("/actions/open-download-folder")} className="codex-btn-secondary">
+              <FolderOpen className="mr-1.5 h-4 w-4" />下载目录
+            </button>
+          </div>
+          {error && (
+            <div className="error-alert mt-3 flex items-start justify-between gap-2 animate-fade-in">
+              <div className="flex items-start gap-2">
+                <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-[#c07070]" />
+                <span>{error}</span>
+              </div>
+              <button onClick={clearError} className="shrink-0 rounded-full p-0.5 text-[#c07070] transition-colors hover:bg-[#faeded] hover:text-[#a85555]">
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+          )}
+        </div>
+
+        <div className="glass-panel flex min-h-0 flex-col rounded-2xl p-4 sm:p-5 lg:col-span-4">
+          <div className="section-title mb-3">
+            <Library className="h-4 w-4" />
+            <span>已入库游戏</span>
+            <span className="ml-auto rounded-full bg-[#e4e9f0]/80 px-2 py-0.5 text-[0.65rem] font-semibold text-[#7a8899]">{importedGames.length}</span>
+          </div>
+          <div className="mb-3 flex flex-wrap gap-2">
+            <button onClick={loadImportedGames} disabled={importsLoading} className="codex-btn-secondary">
+              <RefreshCw className={`mr-1.5 h-4 w-4 ${importsLoading ? "animate-spin" : ""}`} />检测
+            </button>
+            <button onClick={onClearImports} disabled={importsLoading || importedGames.length === 0} className="codex-btn-danger">
+              <Eraser className="mr-1.5 h-4 w-4" />清理全部
+            </button>
+          </div>
+          {importNotice && <div className="mb-3 rounded-lg border border-[#dce1ea] bg-[#f8f9fc] px-3 py-2 text-xs text-[#7a8899]">{importNotice}</div>}
+          <div className="min-h-0 flex-1 space-y-2 overflow-auto">
+            {importsLoading && importedGames.length === 0 ? (
+              <EmptyState icon={Loader2} title="检测中" description="正在扫描 stplug-in 与 manifest 文件。" />
+            ) : importedGames.length === 0 ? (
+              <EmptyState icon={Library} title="暂无已入库游戏" description="完成一次下载并开启自动入库后会显示在这里。" />
+            ) : (
+              importedGames.map((item) => (
+                <div key={`${item.appid}-${item.lua_path}`} className="import-item">
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-semibold text-[#2e3a4e]">{item.name || "未知游戏"}</p>
+                    <p className="mt-1 text-xs text-[#7a8899]">manifest {item.existing_manifest_count}/{item.manifest_count}</p>
+                  </div>
+                  <button onClick={() => onDeleteImportedGame(item)} disabled={importsLoading} className="icon-danger-btn" title="删除入库">
+                    <Trash2 className="h-4 w-4" />
+                  </button>
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+
+        <div className="glass-panel flex min-h-0 flex-col rounded-2xl p-4 sm:p-5 lg:col-span-3">
+          <div className="section-title mb-3">
+            <FileText className="h-4 w-4" />
+            <span>运行日志</span>
+            {logs.length > 0 && <span className="ml-auto rounded-full bg-[#e4e9f0]/80 px-2 py-0.5 text-[0.65rem] font-semibold text-[#7a8899]">{logs.length}</span>}
+          </div>
+          <div ref={logContainerRef} className="flex-1 space-y-1 overflow-auto rounded-xl border border-[#dce1ea]/60 bg-[#f8f9fc]/50 p-3 font-mono text-xs leading-relaxed text-[#5a6878]">
+            {logs.length === 0 ? (
+              <EmptyState icon={FileText} title="暂无日志" description="开始下载后会实时显示处理过程。" />
+            ) : (
+              logs.map((line, idx) => (
+                <div key={`${idx}-${line.slice(0, 8)}`} className="log-line animate-fade-in">{line}</div>
+              ))
+            )}
+          </div>
+        </div>
+      </section>
+    </>
+  );
+
+  const renderTrainerPage = () => (
+    <section className="grid min-h-0 flex-1 grid-cols-1 gap-3 sm:gap-4 xl:grid-cols-12">
+      <div className="glass-panel flex min-h-0 flex-col rounded-3xl p-4 sm:p-5 xl:col-span-5">
+        <div className="section-title mb-3">
+          <Gamepad2 className="h-4 w-4" />
+          <span>选择游戏</span>
+          <span className="ml-auto rounded-full bg-[#e4e9f0]/80 px-2 py-0.5 text-[0.65rem] font-semibold text-[#7a8899]">{installedGames.length}</span>
+        </div>
+        <div className="mb-3 flex gap-2">
+          <div className="relative flex-1">
+            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[#c4ccd8]" />
+            <input
+              value={gameFilter}
+              onChange={(e) => setGameFilter(e.target.value)}
+              placeholder="筛选游戏或 AppID"
+              className="codex-input w-full pl-9"
+            />
+          </div>
+          <button onClick={() => loadInstalledGames()} disabled={installedLoading} className="codex-btn-secondary">
+            <RefreshCw className={`h-4 w-4 ${installedLoading ? "animate-spin" : ""}`} />
+          </button>
+        </div>
+        {installedError && <div className="error-alert mb-3">{installedError}</div>}
+        <div className="min-h-0 flex-1 space-y-2 overflow-auto pr-1">
+          {installedLoading && filteredInstalledGames.length === 0 ? (
+            <EmptyState icon={Loader2} title="扫描中" description="" />
+          ) : filteredInstalledGames.length === 0 ? (
+            <EmptyState icon={Gamepad2} title="没有找到游戏" description="" />
+          ) : (
+            filteredInstalledGames.map((item) => {
+              const key = normalizeGameKey(item.name);
+              const task = trainerTaskMap.get(key);
+              const active = selectedInstalledGame?.appid === item.appid;
+              return (
+                <button key={item.appid} className={`installed-game-card ${active ? "installed-game-card-active" : ""}`} onClick={() => selectInstalledGame(item)}>
+                  {item.image ? <img src={item.image} alt="" className="installed-game-art" /> : <div className="installed-game-art installed-game-art-fallback" />}
+                  <div className="min-w-0 flex-1 text-left">
+                    <p className="truncate text-sm font-semibold text-[#2e3a4e]">{item.name || "未知游戏"}</p>
+                    <p className="mt-1 text-xs text-[#a0aab8]">AppID {item.appid}</p>
+                    <div className="mt-2 flex flex-wrap gap-1.5">
+                      {active && trainerLookup.status === "checking" && <span className="mini-pill mini-pill-slate">查询中</span>}
+                      {active && trainerLookup.status === "available" && <span className="mini-pill mini-pill-green">有修改器</span>}
+                      {active && trainerLookup.status === "unavailable" && <span className="mini-pill mini-pill-amber">没有修改器</span>}
+                      {task?.status === "downloading" && <span className="mini-pill mini-pill-amber">下载中</span>}
+                      {task?.is_running && <span className="mini-pill mini-pill-blue">运行中</span>}
+                    </div>
+                  </div>
+                </button>
+              );
+            })
+          )}
+        </div>
+      </div>
+
+      <div className="flex min-h-0 flex-col gap-3 sm:gap-4 xl:col-span-7">
+        <div className="glass-panel rounded-3xl p-4 sm:p-5">
+          <div className="section-title mb-3">
+            <Play className="h-4 w-4" />
+            <span>修改器</span>
+          </div>
+          <div className="grid grid-cols-1 gap-3 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-end">
+            <div>
+              <input
+                value={trainerQuery}
+                readOnly
+                onKeyDown={(e) => e.key === "Enter" && onLaunchTrainer()}
+                placeholder="输入游戏名"
+                className="codex-input w-full"
+              />
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <button
+                onClick={onLaunchTrainer}
+                disabled={trainerLaunchDisabled}
+                className="codex-btn-primary"
+              >
+                {trainerActionBusy.startsWith("launch") || selectedTrainerTask?.status === "downloading" || trainerLookup.status === "checking" ? (
+                  <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
+                ) : (
+                  <Play className="mr-1.5 h-4 w-4" />
+                )}
+                启动修改器
+              </button>
+              <button onClick={onStopTrainer} disabled={!selectedTrainerTask?.is_running || trainerActionBusy.startsWith("stop")} className="codex-btn-danger">
+                <StopCircle className="mr-1.5 h-4 w-4" />关闭修改器
+              </button>
+            </div>
+          </div>
+          <div className="mt-4 grid grid-cols-1 gap-3 lg:grid-cols-3">
+            <MetricCard icon={FolderCog} label="当前游戏" value={selectedInstalledGame?.name || trainerQuery || "未选择"} tone="amber" />
+            <MetricCard icon={Search} label="修改器" value={trainerLookupStatus} tone={trainerLookup.status === "available" ? "emerald" : "slate"} />
+            <MetricCard
+              icon={MonitorPlay}
+              label="运行状态"
+              value={selectedTrainerTask?.is_running ? "运行中" : selectedTrainerTask?.status === "downloading" ? "下载中" : "未运行"}
+              tone="slate"
+            />
+          </div>
+          {trainerLookup.status === "unavailable" && (
+            <div className="mt-4 rounded-lg border border-[#e8dcc4] bg-[#faf5ec] px-3 py-2 text-sm font-medium text-[#b08a40]">
+              没有修改器
+            </div>
+          )}
+          {trainerLookup.status === "error" && (
+            <div className="error-alert mt-4">{trainerLookup.message || "修改器查询失败"}</div>
+          )}
+          {trainerError && <div className="error-alert mt-4">{trainerError}</div>}
+        </div>
+
+        <div className="glass-panel flex min-h-0 flex-col rounded-2xl p-4 sm:p-5">
+          <div className="section-title mb-3">
+            <MonitorPlay className="h-4 w-4" />
+            <span>状态</span>
+          </div>
+          <div className="space-y-2 overflow-auto">
+            {trainerTasks.length === 0 ? (
+              <EmptyState icon={MonitorPlay} title="待启动" description="" />
+            ) : (
+              trainerTasks.map((item) => (
+                <div key={item.id} className="status-card">
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="truncate text-sm font-semibold text-[#2e3a4e]">{item.game_name}</p>
+                      <StatusBadge status={item.status === "done" ? "success" : item.status === "error" ? "error" : item.status === "downloading" ? "running" : "idle"} />
+                    </div>
+                    <p className="mt-2 text-xs text-[#7a8899]">{item.message || "等待操作"}</p>
+                    {item.is_running && <p className="mt-1 text-xs text-[#8898cc]">PID {item.pid}</p>}
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+
+  return (
+    <div className="min-h-screen bg-codex-bg text-codex-text antialiased selection:bg-[#c8d1e8]/50">
+      <div className="mx-auto flex h-screen w-full max-w-[1700px] flex-col gap-3 px-4 py-3 sm:gap-4 sm:px-6 sm:py-4 lg:px-8">
+        <header className="glass-panel drag-region flex items-center justify-between rounded-2xl px-5 py-2 sm:px-6">
+          <div className="flex items-center gap-2.5">
+            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br from-[#a0b0d4] to-[#8898cc] shadow-sm">
+              <Sparkles className="h-4 w-4 text-white" />
+            </div>
+          <div className="flex flex-col">
+              <span className="text-base font-semibold tracking-tight text-[#2e3a4e] sm:text-lg">
+                SteamTools Manager
+              </span>
+            </div>
+          </div>
+          <div className="flex items-center gap-3">
+            <StatusBadge status={taskStatus} />
+            <WindowControls />
+          </div>
+        </header>
+
+        <section className="glass-panel rounded-3xl p-3 sm:p-4">
+          <div className="grid grid-cols-1 gap-2 lg:grid-cols-2">
+            <PageTab active={activePage === "overview"} icon={Download} label="Manifest 下载" onClick={() => setActivePage("overview")} />
+            <PageTab active={activePage === "trainers"} icon={Gamepad2} label="修改器" onClick={() => setActivePage("trainers")} />
+          </div>
+        </section>
+
+        {activePage === "overview" && renderOverviewPage()}
+        {activePage === "trainers" && renderTrainerPage()}
+      </div>
+    </div>
+  );
+}
+
+export default App;
