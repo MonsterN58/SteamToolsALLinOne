@@ -1,0 +1,12 @@
+{
+    "download_source": "auto",
+    "auto_import": true,
+    "unlock_dlc": true,
+    "search_enhance": true,
+    "patch_emulator_mode": 0,
+    "patch_use_experimental": false,
+    "patch_default_username": "Player",
+    "patch_default_language": "schinese",
+    "lan_default_port": 47584,
+    "denuvo_auto_backup": true
+}

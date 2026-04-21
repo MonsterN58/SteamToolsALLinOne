@@ -1,0 +1,12 @@
+requests>=2.31.0
+beautifulsoup4>=4.12.0
+cloudscraper>=1.2.71
+fuzzywuzzy>=0.18.0
+rarfile>=4.2
+pillow>=10.0.0
+urllib3>=2.0.0
+customtkinter>=5.2.2
+pywinstyles>=1.8
+fastapi>=0.116.0
+uvicorn>=0.35.0
+py7zr>=0.20.0
